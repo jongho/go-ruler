@@ -5,7 +5,7 @@ json-y object testing in go
 ## Installation
 
 ```
-go get github.com/hopkinsth/go-ruler
+go get github.com/kmasouri/go-ruler
 ```
 
 ## Introduction
