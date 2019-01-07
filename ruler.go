@@ -2,9 +2,11 @@ package ruler
 
 import (
 	"encoding/json"
-	"log"
+	"errors"
+	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -78,7 +80,7 @@ func (r *Ruler) Rule(path string) *RulerRule {
 // Test tests all the rules (i.e. filters) in your set of rules,
 // given a map that looks like a JSON object
 // (map[string]interface{})
-func (r *Ruler) Test(o map[string]interface{}) bool {
+func (r *Ruler) Test(o map[string]interface{}) (bool, error) {
 	for _, f := range r.rules {
 		val := pluck(o, f.Path)
 
@@ -88,36 +90,39 @@ func (r *Ruler) Test(o map[string]interface{}) bool {
 			e := reflect.TypeOf(f.Value)
 
 			if !a.Comparable() || !e.Comparable() {
-				return false
+				return false, nil
 			}
 
-			if !r.compare(f, val) {
-				return false
+			result, err := r.compare(f, val)
+			if err != nil {
+				return false, err
+			}
+			if !result {
+				return false, nil
 			}
 		} else if val == nil && (f.Comparator == "exists" || f.Comparator == "nexists") {
 			// either one of these can be done
 			return r.compare(f, val)
 		} else {
-			log.Println("did not find property (%s) on map", f.Path)
 			// if we couldn't find the value on the map
 			// and the comparator isn't exists/nexists, this fails
-			return false
+			return false, fmt.Errorf("did not find property (%s) on map", f.Path)
 		}
 
 	}
 
-	return true
+	return true, nil
 }
 
 // compares real v. actual values
-func (r *Ruler) compare(f *Rule, actual interface{}) bool {
+func (r *Ruler) compare(f *Rule, actual interface{}) (bool, error) {
 	expected := f.Value
 	switch f.Comparator {
 	case "eq":
-		return actual == expected
+		return actual == expected, nil
 
 	case "neq":
-		return actual != expected
+		return actual != expected, nil
 
 	case "gt":
 		return r.inequality(gt, actual, expected)
@@ -133,10 +138,15 @@ func (r *Ruler) compare(f *Rule, actual interface{}) bool {
 
 	case "exists":
 		// not sure this makes complete sense
-		return actual != nil
-
+		if actual != nil {
+			return true, nil
+		}
+		return false, nil
 	case "nexists":
-		return actual == nil
+		if actual == nil {
+			return true, nil
+		}
+		return false, nil
 
 	case "regex":
 		fallthrough
@@ -146,13 +156,17 @@ func (r *Ruler) compare(f *Rule, actual interface{}) bool {
 		return r.regexp(actual, expected)
 
 	case "ncontains":
-		return !r.regexp(actual, expected)
+		result, err := r.regexp(actual, expected)
+		if err != nil {
+			return false, err
+		}
+		return !result, err
+
 	default:
 		//should probably return an error or something
 		//but this is good for now
 		//if comparator is not implemented, return false
-		log.Println("unknown comparator %s", f.Comparator)
-		return false
+		return false, errors.New("unknown comparator %s")
 	}
 }
 
@@ -160,71 +174,65 @@ func (r *Ruler) compare(f *Rule, actual interface{}) bool {
 // separated in a different function because
 // we need to do another type assertion here
 // and some other acrobatics
-func (r *Ruler) inequality(op int, actual, expected interface{}) bool {
+func (r *Ruler) inequality(op int, actual, expected interface{}) (bool, error) {
 
 	if reflect.TypeOf(actual) != reflect.TypeOf(expected) {
-		log.Println("Value types are mismatched, cannot compare values")
-		return false
+		return false, errors.New("Value types are mismatched, cannot compare values")
 	}
 
 	t := reflect.TypeOf(actual).String()
 	switch t {
 	case "uint8":
-		return compareUint(op, actual, expected)
+		return compareUint(op, actual, expected), nil
 	case "uint16":
-		return compareUint(op, actual, expected)
+		return compareUint(op, actual, expected), nil
 	case "uint32":
-		return compareUint(op, actual, expected)
+		return compareUint(op, actual, expected), nil
 	case "uint64":
-		return compareUint(op, actual, expected)
+		return compareUint(op, actual, expected), nil
 	case "uint":
-		return compareUint(op, actual, expected)
+		return compareUint(op, actual, expected), nil
 	case "int8":
-		return compareInt(op, actual, expected)
+		return compareInt(op, actual, expected), nil
 	case "int16":
-		return compareInt(op, actual, expected)
+		return compareInt(op, actual, expected), nil
 	case "int32":
-		return compareInt(op, actual, expected)
+		return compareInt(op, actual, expected), nil
 	case "int64":
-		return compareInt(op, actual, expected)
+		return compareInt(op, actual, expected), nil
 	case "int":
-		return compareInt(op, actual, expected)
+		return compareInt(op, actual, expected), nil
 	case "float32":
-		return compareFloat(op, actual, expected)
+		return compareFloat(op, actual, expected), nil
 	case "float64":
-		return compareFloat(op, actual, expected)
+		return compareFloat(op, actual, expected), nil
 	case "string":
-		return compareStr(op, actual, expected)
+		return compareStr(op, actual, expected), nil
 	default:
-		log.Println("invalid type for inequality comparison")
-		return false
+		return false, errors.New("Invalid type for inequality comparison")
 	}
 
-	return false
 }
 
-func (r *Ruler) regexp(actual, expected interface{}) bool {
+func (r *Ruler) regexp(actual, expected interface{}) (bool, error) {
 	// regexps must be strings
 	var streg string
 	var ok bool
 	if streg, ok = expected.(string); !ok {
-		log.Println("expected value not actually a string, bailing")
-		return false
+		return false, errors.New("expected value not actually a string, bailing")
 	}
 
 	var astring string
 	if astring, ok = actual.(string); !ok {
-		log.Println("actual value not actually a string, bailing")
-		return false
+		return false, errors.New("actual value not actually a string, bailing")
 	}
 
 	reg, err := regexp.Compile(streg)
 	if err != nil {
-		log.Println("regexp is bad, bailing")
-		return false
+		return false, errors.New("regexp is bad, bailing")
 	}
 
-	return reg.MatchString(astring)
+	return reg.MatchString(astring), nil
 }
 
 // given a map, pull a property from it at some deeply nested depth
@@ -335,15 +343,24 @@ func compareStr(op int, actual, expected interface{}) bool {
 	cmpStr[0] = actual.(string)
 	cmpStr[1] = expected.(string)
 
+	actualFloat, err := strconv.ParseFloat(cmpStr[0], 64)
+	if err != nil {
+		return false
+	}
+	expectedFloat, err := strconv.ParseFloat(cmpStr[1], 64)
+	if err != nil {
+		return false
+	}
+
 	switch op {
 	case gt:
-		return cmpStr[0] > cmpStr[1]
+		return actualFloat > expectedFloat
 	case gte:
-		return cmpStr[0] >= cmpStr[1]
+		return actualFloat >= expectedFloat
 	case lt:
-		return cmpStr[0] < cmpStr[1]
+		return actualFloat < expectedFloat
 	case lte:
-		return cmpStr[0] <= cmpStr[1]
+		return actualFloat <= expectedFloat
 	}
 
 	return false
